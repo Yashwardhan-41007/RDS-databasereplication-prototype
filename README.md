@@ -18,74 +18,21 @@
 
 ---
 
-## Alternative: Local Scripts
-
-If you prefer running locally instead of GitHub Actions:
-
-### Option 1: One-Liner
-```bash
-./quick_replicate.sh src_host src_user src_pass tgt_host tgt_user tgt_pass database_name
-```
-
-### Option 2: Interactive Script
-```bash
-./rds_replicate_auto.sh
-```
-
 ## 📁 Files Overview
 
 | File | Purpose |
 |------|---------|
-| `rds_replicate_auto.sh` | **Main script** - Full featured with logging |
-| `quick_replicate.sh` | **Simple version** - Quick one-command replication |
-| `replication_config.env` | **Config template** - Store your credentials |
-| `setup_cron.sh` | **Scheduler** - Set up automatic daily runs |
-| `.github/workflows/rds-replication.yml` | **GitHub Actions** - Free CI/CD automation |
+| `.github/workflows/rds-replication.yml` | **GitHub Actions workflow** - Automated replication |
+| `README.md` | **Main documentation** - Getting started guide |
+| `WORKFLOW_USAGE.md` | **Usage guide** - Detailed instructions |
 
-## 🔧 Setup Instructions
+## 🔧 How It Works
 
-### 1. Make Scripts Executable
-```bash
-chmod +x *.sh
-```
-
-### 2. Set Up Configuration
-```bash
-# Copy and edit config file
-cp replication_config.env production.env
-nano production.env
-
-# Add your RDS endpoints and credentials
-SRC_HOST="source-rds.xxx.ap-south-1.rds.amazonaws.com"
-SRC_USER="admin"
-SRC_PASS="your-source-password"
-# ... etc
-```
-
-### 3. Test Connection
-```bash
-# Test with your config
-./rds_replicate_auto.sh production.env
-```
-
-## ⏰ Scheduling Options
-
-### Cron Job (Local Machine)
-```bash
-# Set up daily replication at 2 AM
-./setup_cron.sh
-```
-
-### GitHub Actions (Free Cloud)
-1. Push this repo to GitHub
-2. Go to Actions tab → Run workflow
-3. Enter credentials manually each time
-4. No secrets stored in repository
-
-### AWS Lambda (Free Tier)
-- Upload `quick_replicate.sh` as Lambda function
-- Use CloudWatch Events for scheduling
-- 1M free requests per month
+The GitHub Actions workflow:
+1. ✅ Tests connections to both RDS instances
+2. 🔄 Dumps database from source using `mysqldump`
+3. 📥 Restores to target database
+4. ✔️ Verifies table counts match
 
 ## 📊 Features
 
@@ -101,33 +48,23 @@ SRC_PASS="your-source-password"
 ### 🔒 Security
 - **Passwords masked in logs** - Never visible in GitHub Actions output
 - **No stored credentials** - Manual entry each time
-- Config files can be secured with file permissions
-- Backup files for safety
+- **Environment variables** - Credentials not exposed in command strings
+- **Error suppression** - MySQL errors hidden from logs
 
-## 📋 Examples
+## 📋 Usage Example
 
-### Replicate Single Database
-```bash
-./quick_replicate.sh \
-  source-rds.amazonaws.com admin pass123 \
-  target-rds.amazonaws.com admin pass456 \
-  production_db
-```
+### Running the Workflow
 
-### Replicate All Databases
-```bash
-# Edit config file with DB_LIST="all"
-./rds_replicate_auto.sh my_config.env
-```
-
-### Scheduled Replication
-```bash
-# Set up daily at 2 AM
-./setup_cron.sh
-
-# Check cron job
-crontab -l
-```
+1. Go to your GitHub repository
+2. Click **Actions** tab
+3. Select **RDS Replication** workflow
+4. Click **Run workflow**
+5. Fill in the form:
+   - Database name (e.g., `production_db`)
+   - Source RDS host, username, password
+   - Target RDS host, username, password
+6. Click **Run workflow** button
+7. Monitor the progress in real-time
 
 ## 🆘 Troubleshooting
 
@@ -141,7 +78,7 @@ crontab -l
 - RDS user needs `CREATE`, `DROP`, `INSERT`, `UPDATE`, `DELETE` on target
 
 ### Verification Failures
-- Check logs in `./logs/` directory
+- Check GitHub Actions workflow logs
 - Compare table counts manually
 - Verify triggers and stored procedures
 
@@ -149,37 +86,35 @@ crontab -l
 
 | Service | Cost |
 |---------|------|
-| **Shell Scripts** | $0 |
 | **GitHub Actions** | $0 (2000 minutes/month free) |
-| **Cron Jobs** | $0 |
-| **AWS Lambda** | $0 (1M requests/month free) |
 | **Data Transfer** | Only RDS → RDS within same region |
+| **Total** | **$0** 🎉 |
 
 ## 🔄 Comparison with Alternatives
 
 | Solution | Cost | Setup | Real-time | Best For |
 |----------|------|-------|-----------|----------|
-| **These Scripts** | Free | Easy | No | Batch replication |
-| **AWS DMS** | ~$50/month | Medium | Yes | Production workloads |
-| **Jenkins** | EC2 costs | Complex | No | Enterprise environments |
-| **Lambda + EventBridge** | ~$1/month | Medium | No | Serverless preference |
+| **This Solution** | Free | Easy | No | Manual/on-demand replication |
+| **AWS DMS** | ~$50/month | Medium | Yes | Continuous replication |
+| **Jenkins** | EC2 costs | Complex | No | Enterprise CI/CD |
+| **Lambda + EventBridge** | ~$1/month | Medium | No | Scheduled automation |
 
 ## 🎯 Next Steps
 
-1. **Test** with a small database first
-2. **Schedule** regular replications
-3. **Monitor** logs for any issues
-4. **Set up** notifications (Slack/email)
-5. **Document** your specific configuration
+1. **Test** with a small/dummy database first
+2. **Verify** logs show passwords as `***`
+3. **Monitor** GitHub Actions logs for any issues
+4. **Document** your RDS endpoints for quick access
+5. **Run** replications whenever needed
 
 ## 📞 Support
 
 If you encounter issues:
-1. Check the log files in `./logs/`
+1. Check the **GitHub Actions logs** for detailed error messages
 2. Test connections manually with `mysql` command
-3. Verify RDS security groups and networking
-4. Ensure sufficient disk space for backups
+3. Verify RDS security groups allow GitHub Actions IPs
+4. Ensure credentials are correct
 
 ---
 
-**Ready to automate your RDS replication? Start with the quick script and scale up as needed!**
+**Ready to replicate your RDS databases? Just push to GitHub and run the workflow!** 🚀
