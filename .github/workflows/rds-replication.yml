@@ -1,7 +1,8 @@
 name: RDS Replication
 
 # SECURITY: Passwords are automatically masked in logs (appear as ***)
-# For personal/internal use - no approval workflow needed
+# Uses SSH tunnel through bastion host to access private RDS instances
+# Requires: BASTION_SSH_KEY, BASTION_HOST, BASTION_USER secrets in GitHub
 
 on:
   # Manual trigger - Click "Run workflow" button in GitHub Actions tab
@@ -40,6 +41,33 @@ jobs:
         echo "::add-mask::${{ inputs.src_pass }}"
         echo "::add-mask::${{ inputs.tgt_pass }}"
         echo "🔒 Passwords masked in logs"
+    
+    - name: Setup SSH Tunnel
+      env:
+        SSH_KEY: ${{ secrets.BASTION_SSH_KEY }}
+        BASTION_HOST: ${{ secrets.BASTION_HOST }}
+        BASTION_USER: ${{ secrets.BASTION_USER }}
+      run: |
+        # Create SSH directory
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        
+        # Save SSH key
+        echo "$SSH_KEY" > ~/.ssh/bastion_key
+        chmod 600 ~/.ssh/bastion_key
+        
+        # Add bastion to known hosts
+        ssh-keyscan -H $BASTION_HOST >> ~/.ssh/known_hosts
+        
+        # Start SSH tunnel in background
+        # Forward local port 3307 to source RDS through bastion
+        ssh -i ~/.ssh/bastion_key -f -N -L 3307:${{ inputs.src_host }}:3306 $BASTION_USER@$BASTION_HOST
+        
+        # Forward local port 3308 to target RDS through bastion
+        ssh -i ~/.ssh/bastion_key -f -N -L 3308:${{ inputs.tgt_host }}:3306 $BASTION_USER@$BASTION_HOST
+        
+        echo "✅ SSH tunnels established"
+    
     - name: Install MySQL Client
       run: |
         sudo apt-get update -qq
@@ -50,12 +78,12 @@ jobs:
         SRC_PASS: ${{ inputs.src_pass }}
         TGT_PASS: ${{ inputs.tgt_pass }}
       run: |
-        echo "Testing source RDS connection..."
-        mysql -h ${{ inputs.src_host }} -u ${{ inputs.src_user }} -p"${SRC_PASS}" -e "SELECT 1" > /dev/null 2>&1
+        echo "Testing source RDS connection (through SSH tunnel)..."
+        mysql -h 127.0.0.1 -P 3307 -u ${{ inputs.src_user }} -p"${SRC_PASS}" -e "SELECT 1" > /dev/null 2>&1
         echo "✅ Source connection OK"
         
-        echo "Testing target RDS connection..."
-        mysql -h ${{ inputs.tgt_host }} -u ${{ inputs.tgt_user }} -p"${TGT_PASS}" -e "SELECT 1" > /dev/null 2>&1
+        echo "Testing target RDS connection (through SSH tunnel)..."
+        mysql -h 127.0.0.1 -P 3308 -u ${{ inputs.tgt_user }} -p"${TGT_PASS}" -e "SELECT 1" > /dev/null 2>&1
         echo "✅ Target connection OK"
         
     - name: Replicate Database
@@ -67,7 +95,7 @@ jobs:
         echo "Source: ${{ inputs.src_host }}"
         echo "Target: ${{ inputs.tgt_host }}"
         
-        mysqldump -h ${{ inputs.src_host }} \
+        mysqldump -h 127.0.0.1 -P 3307 \
                   -u ${{ inputs.src_user }} \
                   -p"${SRC_PASS}" \
                   --single-transaction \
@@ -77,7 +105,7 @@ jobs:
                   --events \
                   --set-gtid-purged=OFF \
                   --databases ${{ github.event.inputs.database_name }} \
-        2>/dev/null | mysql -h ${{ inputs.tgt_host }} \
+        2>/dev/null | mysql -h 127.0.0.1 -P 3308 \
                 -u ${{ inputs.tgt_user }} \
                 -p"${TGT_PASS}" \
         2>/dev/null
@@ -91,13 +119,13 @@ jobs:
       run: |
         echo "🔍 Verifying replication..."
         
-        SRC_TABLES=$(mysql -h ${{ inputs.src_host }} \
+        SRC_TABLES=$(mysql -h 127.0.0.1 -P 3307 \
                            -u ${{ inputs.src_user }} \
                            -p"${SRC_PASS}" \
                            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
                            2>/dev/null)
         
-        TGT_TABLES=$(mysql -h ${{ inputs.tgt_host }} \
+        TGT_TABLES=$(mysql -h 127.0.0.1 -P 3308 \
                            -u ${{ inputs.tgt_user }} \
                            -p"${TGT_PASS}" \
                            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
