@@ -45,12 +45,6 @@ The GitHub Actions workflow:
 - **Error handling** and rollback
 - **Flexible configuration**
 
-### 🔒 Security
-- **Passwords masked in logs** - Never visible in GitHub Actions output
-- **No stored credentials** - Manual entry each time
-- **Environment variables** - Credentials not exposed in command strings
-- **Error suppression** - MySQL errors hidden from logs
-
 ## 📋 Usage Example
 
 ### Running the Workflow
@@ -82,39 +76,5 @@ The GitHub Actions workflow:
 - Compare table counts manually
 - Verify triggers and stored procedures
 
-## 💰 Cost Breakdown
-
-| Service | Cost |
-|---------|------|
-| **GitHub Actions** | $0 (2000 minutes/month free) |
-| **Data Transfer** | Only RDS → RDS within same region |
-| **Total** | **$0** 🎉 |
-
-## 🔄 Comparison with Alternatives
-
-| Solution | Cost | Setup | Real-time | Best For |
-|----------|------|-------|-----------|----------|
-| **This Solution** | Free | Easy | No | Manual/on-demand replication |
-| **AWS DMS** | ~$50/month | Medium | Yes | Continuous replication |
-| **Jenkins** | EC2 costs | Complex | No | Enterprise CI/CD |
-| **Lambda + EventBridge** | ~$1/month | Medium | No | Scheduled automation |
-
-## 🎯 Next Steps
-
-1. **Test** with a small/dummy database first
-2. **Verify** logs show passwords as `***`
-3. **Monitor** GitHub Actions logs for any issues
-4. **Document** your RDS endpoints for quick access
-5. **Run** replications whenever needed
-
-## 📞 Support
-
-If you encounter issues:
-1. Check the **GitHub Actions logs** for detailed error messages
-2. Test connections manually with `mysql` command
-3. Verify RDS security groups allow GitHub Actions IPs
-4. Ensure credentials are correct
-
----
 
 **Ready to replicate your RDS databases? Just push to GitHub and run the workflow!** 🚀
