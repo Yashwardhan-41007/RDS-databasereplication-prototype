@@ -48,6 +48,10 @@ jobs:
         BASTION_HOST: ${{ secrets.BASTION_HOST }}
         BASTION_USER: ${{ secrets.BASTION_USER }}
       run: |
+        set -e
+        
+        echo "🔧 Setting up SSH tunnel..."
+        
         # Create SSH directory
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
@@ -56,17 +60,56 @@ jobs:
         echo "$SSH_KEY" > ~/.ssh/bastion_key
         chmod 600 ~/.ssh/bastion_key
         
-        # Add bastion to known hosts
-        ssh-keyscan -H $BASTION_HOST >> ~/.ssh/known_hosts
+        # Verify key format
+        if ! grep -q "BEGIN.*PRIVATE KEY" ~/.ssh/bastion_key; then
+          echo "❌ SSH key format invalid - must contain BEGIN PRIVATE KEY header"
+          exit 1
+        fi
         
-        # Start SSH tunnel in background
-        # Forward local port 3307 to source RDS through bastion
-        ssh -i ~/.ssh/bastion_key -f -N -L 3307:${{ inputs.src_host }}:3306 $BASTION_USER@$BASTION_HOST
+        echo "✅ SSH key saved"
         
-        # Forward local port 3308 to target RDS through bastion
-        ssh -i ~/.ssh/bastion_key -f -N -L 3308:${{ inputs.tgt_host }}:3306 $BASTION_USER@$BASTION_HOST
+        # Add bastion to known hosts (suppress warnings)
+        ssh-keyscan -H $BASTION_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
         
-        echo "✅ SSH tunnels established"
+        echo "✅ Added bastion to known hosts"
+        
+        # Test SSH connection first
+        echo "Testing SSH connection to bastion..."
+        if ! ssh -i ~/.ssh/bastion_key -o ConnectTimeout=10 -o StrictHostKeyChecking=no $BASTION_USER@$BASTION_HOST "echo 'SSH connection successful'" 2>&1; then
+          echo "❌ SSH connection to bastion failed"
+          echo "Troubleshooting tips:"
+          echo "1. Verify BASTION_HOST is correct"
+          echo "2. Verify BASTION_USER is correct (usually 'ubuntu' or 'ec2-user')"
+          echo "3. Verify SSH key matches the one used for bastion"
+          echo "4. Check bastion security group allows SSH (port 22) from GitHub Actions IPs"
+          exit 1
+        fi
+        
+        echo "✅ SSH connection to bastion successful"
+        
+        # Start SSH tunnel in background for source RDS
+        echo "Creating tunnel for source RDS: ${{ inputs.src_host }}"
+        ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -f -N -L 3307:${{ inputs.src_host }}:3306 $BASTION_USER@$BASTION_HOST
+        
+        # Start SSH tunnel in background for target RDS
+        echo "Creating tunnel for target RDS: ${{ inputs.tgt_host }}"
+        ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -f -N -L 3308:${{ inputs.tgt_host }}:3306 $BASTION_USER@$BASTION_HOST
+        
+        # Verify tunnels are running
+        sleep 2
+        if ! netstat -an | grep -q "127.0.0.1:3307"; then
+          echo "❌ Source tunnel (port 3307) failed to establish"
+          exit 1
+        fi
+        
+        if ! netstat -an | grep -q "127.0.0.1:3308"; then
+          echo "❌ Target tunnel (port 3308) failed to establish"
+          exit 1
+        fi
+        
+        echo "✅ SSH tunnels established successfully"
+        echo "   - Source RDS: localhost:3307 → ${{ inputs.src_host }}:3306"
+        echo "   - Target RDS: localhost:3308 → ${{ inputs.tgt_host }}:3306"
     
     - name: Install MySQL Client
       run: |
