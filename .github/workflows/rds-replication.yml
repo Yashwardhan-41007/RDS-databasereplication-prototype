@@ -1,0 +1,114 @@
+name: RDS Replication
+
+# SECURITY: Passwords are automatically masked in logs (appear as ***)
+# For personal/internal use - no approval workflow needed
+
+on:
+  # Manual trigger - Click "Run workflow" button in GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      database_name:
+        description: 'Database name to replicate'
+        required: true
+        default: 'dummy'
+      src_host:
+        description: 'Source RDS Host'
+        required: true
+      src_user:
+        description: 'Source RDS Username'
+        required: true
+      src_pass:
+        description: 'Source RDS Password'
+        required: true
+      tgt_host:
+        description: 'Target RDS Host'
+        required: true
+      tgt_user:
+        description: 'Target RDS Username'
+        required: true
+      tgt_pass:
+        description: 'Target RDS Password'
+        required: true
+
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Mask Sensitive Data
+      run: |
+        echo "::add-mask::${{ inputs.src_pass }}"
+        echo "::add-mask::${{ inputs.tgt_pass }}"
+        echo "🔒 Passwords masked in logs"
+    - name: Install MySQL Client
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y mysql-client
+        
+    - name: Test Connections
+      env:
+        SRC_PASS: ${{ inputs.src_pass }}
+        TGT_PASS: ${{ inputs.tgt_pass }}
+      run: |
+        echo "Testing source RDS connection..."
+        mysql -h ${{ inputs.src_host }} -u ${{ inputs.src_user }} -p"${SRC_PASS}" -e "SELECT 1" > /dev/null 2>&1
+        echo "✅ Source connection OK"
+        
+        echo "Testing target RDS connection..."
+        mysql -h ${{ inputs.tgt_host }} -u ${{ inputs.tgt_user }} -p"${TGT_PASS}" -e "SELECT 1" > /dev/null 2>&1
+        echo "✅ Target connection OK"
+        
+    - name: Replicate Database
+      env:
+        SRC_PASS: ${{ inputs.src_pass }}
+        TGT_PASS: ${{ inputs.tgt_pass }}
+      run: |
+        echo "🔄 Starting replication of database: ${{ github.event.inputs.database_name }}"
+        echo "Source: ${{ inputs.src_host }}"
+        echo "Target: ${{ inputs.tgt_host }}"
+        
+        mysqldump -h ${{ inputs.src_host }} \
+                  -u ${{ inputs.src_user }} \
+                  -p"${SRC_PASS}" \
+                  --single-transaction \
+                  --quick \
+                  --routines \
+                  --triggers \
+                  --events \
+                  --set-gtid-purged=OFF \
+                  --databases ${{ github.event.inputs.database_name }} \
+        2>/dev/null | mysql -h ${{ inputs.tgt_host }} \
+                -u ${{ inputs.tgt_user }} \
+                -p"${TGT_PASS}" \
+        2>/dev/null
+        
+        echo "✅ Replication completed successfully!"
+        
+    - name: Verify Replication
+      env:
+        SRC_PASS: ${{ inputs.src_pass }}
+        TGT_PASS: ${{ inputs.tgt_pass }}
+      run: |
+        echo "🔍 Verifying replication..."
+        
+        SRC_TABLES=$(mysql -h ${{ inputs.src_host }} \
+                           -u ${{ inputs.src_user }} \
+                           -p"${SRC_PASS}" \
+                           -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
+                           2>/dev/null)
+        
+        TGT_TABLES=$(mysql -h ${{ inputs.tgt_host }} \
+                           -u ${{ inputs.tgt_user }} \
+                           -p"${TGT_PASS}" \
+                           -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
+                           2>/dev/null)
+        
+        echo "Source tables: $SRC_TABLES"
+        echo "Target tables: $TGT_TABLES"
+        
+        if [ "$SRC_TABLES" -eq "$TGT_TABLES" ]; then
+          echo "✅ Verification passed - Table counts match!"
+        else
+          echo "⚠️  Warning: Table count mismatch"
+          exit 1
+        fi
