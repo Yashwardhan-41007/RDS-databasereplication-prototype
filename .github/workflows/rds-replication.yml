@@ -1,8 +1,8 @@
 name: RDS Replication
 
 # SECURITY: Passwords are automatically masked in logs (appear as ***)
-# Uses SSH tunnel through bastion host to access private RDS instances
-# Requires: BASTION_SSH_KEY, BASTION_HOST, BASTION_USER secrets in GitHub
+# Uses AWS SSM to execute commands on EC2 instance inside VPC
+# Requires: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, SSM_INSTANCE_ID secrets in GitHub
 
 on:
   # Manual trigger - Click "Run workflow" button in GitHub Actions tab
@@ -42,94 +42,92 @@ jobs:
         echo "::add-mask::${{ inputs.tgt_pass }}"
         echo "🔒 Passwords masked in logs"
     
-    - name: Setup SSH Tunnel
-      env:
-        SSH_KEY: ${{ secrets.BASTION_SSH_KEY }}
-        BASTION_HOST: ${{ secrets.BASTION_HOST }}
-        BASTION_USER: ${{ secrets.BASTION_USER }}
-      run: |
-        set -e
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-south-1
         
-        echo "🔧 Setting up SSH tunnel..."
-        
-        # Create SSH directory
-        mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        
-        # Save SSH key
-        echo "$SSH_KEY" > ~/.ssh/bastion_key
-        chmod 600 ~/.ssh/bastion_key
-        
-        # Verify key format
-        if ! grep -q "BEGIN.*PRIVATE KEY" ~/.ssh/bastion_key; then
-          echo "❌ SSH key format invalid - must contain BEGIN PRIVATE KEY header"
-          exit 1
-        fi
-        
-        echo "✅ SSH key saved"
-        
-        # Add bastion to known hosts (suppress warnings)
-        ssh-keyscan -H $BASTION_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
-        
-        echo "✅ Added bastion to known hosts"
-        
-        # Test SSH connection first
-        echo "Testing SSH connection to bastion..."
-        if ! ssh -i ~/.ssh/bastion_key -o ConnectTimeout=10 -o StrictHostKeyChecking=no $BASTION_USER@$BASTION_HOST "echo 'SSH connection successful'" 2>&1; then
-          echo "❌ SSH connection to bastion failed"
-          echo "Troubleshooting tips:"
-          echo "1. Verify BASTION_HOST is correct"
-          echo "2. Verify BASTION_USER is correct (usually 'ubuntu' or 'ec2-user')"
-          echo "3. Verify SSH key matches the one used for bastion"
-          echo "4. Check bastion security group allows SSH (port 22) from GitHub Actions IPs"
-          exit 1
-        fi
-        
-        echo "✅ SSH connection to bastion successful"
-        
-        # Start SSH tunnel in background for source RDS
-        echo "Creating tunnel for source RDS: ${{ inputs.src_host }}"
-        ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -f -N -L 3307:${{ inputs.src_host }}:3306 $BASTION_USER@$BASTION_HOST
-        
-        # Start SSH tunnel in background for target RDS
-        echo "Creating tunnel for target RDS: ${{ inputs.tgt_host }}"
-        ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -f -N -L 3308:${{ inputs.tgt_host }}:3306 $BASTION_USER@$BASTION_HOST
-        
-        # Verify tunnels are running
-        sleep 2
-        if ! netstat -an | grep -q "127.0.0.1:3307"; then
-          echo "❌ Source tunnel (port 3307) failed to establish"
-          exit 1
-        fi
-        
-        if ! netstat -an | grep -q "127.0.0.1:3308"; then
-          echo "❌ Target tunnel (port 3308) failed to establish"
-          exit 1
-        fi
-        
-        echo "✅ SSH tunnels established successfully"
-        echo "   - Source RDS: localhost:3307 → ${{ inputs.src_host }}:3306"
-        echo "   - Target RDS: localhost:3308 → ${{ inputs.tgt_host }}:3306"
-    
-    - name: Install MySQL Client
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y mysql-client
-        
-    - name: Test Connections
+    - name: Test Source RDS Connection via SSM
       env:
         SRC_PASS: ${{ inputs.src_pass }}
+      run: |
+        echo "🔍 Testing source RDS connection via SSM..."
+        
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids ${{ secrets.SSM_INSTANCE_ID }} \
+          --document-name "AWS-RunShellScript" \
+          --comment "Test source RDS connectivity" \
+          --parameters "commands=[\"mysql -h ${{ inputs.src_host }} -u ${{ inputs.src_user }} -p'${SRC_PASS}' -e 'SELECT 1' 2>&1\"]" \
+          --query "Command.CommandId" \
+          --output text)
+        
+        echo "SSM Command ID: $COMMAND_ID"
+        
+        # Wait for command to complete
+        aws ssm wait command-executed \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --timeout 30 || true
+        
+        # Get command output
+        OUTPUT=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardOutputContent" \
+          --output text)
+        
+        echo "$OUTPUT"
+        
+        # Check if successful
+        if echo "$OUTPUT" | grep -q "1"; then
+          echo "✅ Source RDS connection successful"
+        else
+          echo "❌ Source RDS connection failed"
+          exit 1
+        fi
+    
+    - name: Test Target RDS Connection via SSM
+      env:
         TGT_PASS: ${{ inputs.tgt_pass }}
       run: |
-        echo "Testing source RDS connection (through SSH tunnel)..."
-        mysql -h 127.0.0.1 -P 3307 -u ${{ inputs.src_user }} -p"${SRC_PASS}" -e "SELECT 1" > /dev/null 2>&1
-        echo "✅ Source connection OK"
+        echo "🔍 Testing target RDS connection via SSM..."
         
-        echo "Testing target RDS connection (through SSH tunnel)..."
-        mysql -h 127.0.0.1 -P 3308 -u ${{ inputs.tgt_user }} -p"${TGT_PASS}" -e "SELECT 1" > /dev/null 2>&1
-        echo "✅ Target connection OK"
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids ${{ secrets.SSM_INSTANCE_ID }} \
+          --document-name "AWS-RunShellScript" \
+          --comment "Test target RDS connectivity" \
+          --parameters "commands=[\"mysql -h ${{ inputs.tgt_host }} -u ${{ inputs.tgt_user }} -p'${TGT_PASS}' -e 'SELECT 1' 2>&1\"]" \
+          --query "Command.CommandId" \
+          --output text)
         
-    - name: Replicate Database
+        echo "SSM Command ID: $COMMAND_ID"
+        
+        # Wait for command to complete
+        aws ssm wait command-executed \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --timeout 30 || true
+        
+        # Get command output
+        OUTPUT=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardOutputContent" \
+          --output text)
+        
+        echo "$OUTPUT"
+        
+        # Check if successful
+        if echo "$OUTPUT" | grep -q "1"; then
+          echo "✅ Target RDS connection successful"
+        else
+          echo "❌ Target RDS connection failed"
+          exit 1
+        fi
+        
+    - name: Replicate Database via SSM
       env:
         SRC_PASS: ${{ inputs.src_pass }}
         TGT_PASS: ${{ inputs.tgt_pass }}
@@ -137,49 +135,111 @@ jobs:
         echo "🔄 Starting replication of database: ${{ github.event.inputs.database_name }}"
         echo "Source: ${{ inputs.src_host }}"
         echo "Target: ${{ inputs.tgt_host }}"
+        echo ""
         
-        mysqldump -h 127.0.0.1 -P 3307 \
-                  -u ${{ inputs.src_user }} \
-                  -p"${SRC_PASS}" \
-                  --single-transaction \
-                  --quick \
-                  --routines \
-                  --triggers \
-                  --events \
-                  --set-gtid-purged=OFF \
-                  --databases ${{ github.event.inputs.database_name }} \
-        2>/dev/null | mysql -h 127.0.0.1 -P 3308 \
-                -u ${{ inputs.tgt_user }} \
-                -p"${TGT_PASS}" \
-        2>/dev/null
+        # Create the replication command
+        REPLICATION_CMD="mysqldump -h ${{ inputs.src_host }} -u ${{ inputs.src_user }} -p'${SRC_PASS}' --single-transaction --quick --routines --triggers --events --set-gtid-purged=OFF --databases ${{ github.event.inputs.database_name }} 2>/dev/null | mysql -h ${{ inputs.tgt_host }} -u ${{ inputs.tgt_user }} -p'${TGT_PASS}' 2>/dev/null && echo 'Replication completed successfully' || echo 'Replication failed'"
         
-        echo "✅ Replication completed successfully!"
+        # Send replication command to EC2 via SSM
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids ${{ secrets.SSM_INSTANCE_ID }} \
+          --document-name "AWS-RunShellScript" \
+          --comment "RDS Database Replication" \
+          --parameters "commands=[\"$REPLICATION_CMD\"]" \
+          --timeout-seconds 3600 \
+          --query "Command.CommandId" \
+          --output text)
         
-    - name: Verify Replication
+        echo "SSM Command ID: $COMMAND_ID"
+        echo "⏳ Replication in progress... This may take several minutes depending on database size."
+        
+        # Wait for command to complete (with longer timeout for large databases)
+        aws ssm wait command-executed \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --timeout 3600 || true
+        
+        # Get command status and output
+        STATUS=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "Status" \
+          --output text)
+        
+        OUTPUT=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardOutputContent" \
+          --output text)
+        
+        ERROR_OUTPUT=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardErrorContent" \
+          --output text)
+        
+        echo "Command Status: $STATUS"
+        echo "Output: $OUTPUT"
+        
+        if [ ! -z "$ERROR_OUTPUT" ]; then
+          echo "Errors: $ERROR_OUTPUT"
+        fi
+        
+        # Check if replication was successful
+        if [ "$STATUS" = "Success" ] && echo "$OUTPUT" | grep -q "Replication completed successfully"; then
+          echo "✅ Replication completed successfully!"
+        else
+          echo "❌ Replication failed"
+          exit 1
+        fi
+        
+    - name: Verify Replication via SSM
       env:
         SRC_PASS: ${{ inputs.src_pass }}
         TGT_PASS: ${{ inputs.tgt_pass }}
       run: |
         echo "🔍 Verifying replication..."
         
-        SRC_TABLES=$(mysql -h 127.0.0.1 -P 3307 \
-                           -u ${{ inputs.src_user }} \
-                           -p"${SRC_PASS}" \
-                           -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
-                           2>/dev/null)
+        # Get source table count
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids ${{ secrets.SSM_INSTANCE_ID }} \
+          --document-name "AWS-RunShellScript" \
+          --comment "Get source table count" \
+          --parameters "commands=[\"mysql -h ${{ inputs.src_host }} -u ${{ inputs.src_user }} -p'${SRC_PASS}' -N -e \\\"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'\\\" 2>/dev/null\"]" \
+          --query "Command.CommandId" \
+          --output text)
         
-        TGT_TABLES=$(mysql -h 127.0.0.1 -P 3308 \
-                           -u ${{ inputs.tgt_user }} \
-                           -p"${TGT_PASS}" \
-                           -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'" \
-                           2>/dev/null)
+        aws ssm wait command-executed --command-id $COMMAND_ID --instance-id ${{ secrets.SSM_INSTANCE_ID }} --timeout 30 || true
+        
+        SRC_TABLES=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardOutputContent" \
+          --output text | tr -d '\n')
+        
+        # Get target table count
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids ${{ secrets.SSM_INSTANCE_ID }} \
+          --document-name "AWS-RunShellScript" \
+          --comment "Get target table count" \
+          --parameters "commands=[\"mysql -h ${{ inputs.tgt_host }} -u ${{ inputs.tgt_user }} -p'${TGT_PASS}' -N -e \\\"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${{ github.event.inputs.database_name }}'\\\" 2>/dev/null\"]" \
+          --query "Command.CommandId" \
+          --output text)
+        
+        aws ssm wait command-executed --command-id $COMMAND_ID --instance-id ${{ secrets.SSM_INSTANCE_ID }} --timeout 30 || true
+        
+        TGT_TABLES=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ secrets.SSM_INSTANCE_ID }} \
+          --query "StandardOutputContent" \
+          --output text | tr -d '\n')
         
         echo "Source tables: $SRC_TABLES"
         echo "Target tables: $TGT_TABLES"
         
-        if [ "$SRC_TABLES" -eq "$TGT_TABLES" ]; then
+        if [ "$SRC_TABLES" = "$TGT_TABLES" ] && [ ! -z "$SRC_TABLES" ]; then
           echo "✅ Verification passed - Table counts match!"
         else
-          echo "⚠️  Warning: Table count mismatch"
+          echo "⚠️  Warning: Table count mismatch or verification failed"
           exit 1
         fi
