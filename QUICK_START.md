@@ -6,23 +6,41 @@ Your workflow now uses **AWS Systems Manager (SSM)** instead of SSH tunnels - th
 
 ---
 
-## 🚀 3 Steps to Get Started
+## 🚀 2 Steps to Get Started
 
-### Step 1: Add GitHub Secrets
+### Step 1: Set Up IAM Role & Add GitHub Secrets
 
-Go to: `https://github.com/Yashwardhan-41007/RDS-databasereplication-prototype/settings/secrets/actions`
+**Your company requires IAM roles (no access keys) - this is more secure!** ✅
 
-**Add these 3 secrets:**
+#### Option A: Ask Your AWS Admin (Easiest)
+Ask your AWS admin to:
+1. Create an IAM role for GitHub Actions with SSM permissions
+2. Give you the **Role ARN** (looks like: `arn:aws:iam::123456789012:role/RoleName`)
 
-1. **`AWS_ACCESS_KEY_ID`** - Your AWS access key
-2. **`AWS_SECRET_ACCESS_KEY`** - Your AWS secret key  
-3. **`SSM_INSTANCE_ID`** - Value: `i-0af51889228f2d442`
+Then add these 2 secrets to GitHub:
+- Go to: `https://github.com/Yashwardhan-41007/RDS-databasereplication-prototype/settings/secrets/actions`
+- **`AWS_ROLE_ARN`** - The role ARN from your admin
+- **`SSM_INSTANCE_ID`** - Value: `i-0af51889228f2d442`
 
-**Note:** Your team likely already has the AWS credentials. Check if they exist first!
+#### Option B: Set It Up Yourself
+Follow the detailed guide: **`IAM_ROLE_SETUP.md`**
+
+It takes ~10 minutes and includes:
+- Creating OIDC provider (one-time setup)
+- Creating IAM role with SSM permissions
+- Trust policy configuration
 
 ---
 
-### Step 2: Verify EC2 Instance
+### Step 2: Run the Workflow
+
+1. Go to **Actions** tab on GitHub
+2. Click **"RDS Replication"**
+3. Click **"Run workflow"**
+4. Fill in database details
+5. ✅ Done!
+
+**Optional: Verify EC2 Instance First**
 
 The workflow uses your team's EC2 instance: **`i-0af51889228f2d442`**
 
@@ -45,37 +63,23 @@ sudo apt-get update && sudo apt-get install -y mysql-client
 
 ---
 
-### Step 3: Run the Workflow
-
-1. Go to **Actions** tab on GitHub
-2. Click **"RDS Replication"**
-3. Click **"Run workflow"**
-4. Fill in:
-   - Database name
-   - Source RDS host (private endpoint is fine!)
-   - Source credentials
-   - Target RDS host (private endpoint is fine!)
-   - Target credentials
-5. Click **"Run workflow"**
-6. ✅ Done!
-
----
-
 ## 🎯 Key Benefits
 
 - ✅ **No security group changes needed**
 - ✅ **No SSH keys to manage**
+- ✅ **No AWS access keys** (uses IAM roles with OIDC)
 - ✅ **Works with private RDS**
 - ✅ **Same approach your team uses**
-- ✅ **IAM-based authentication**
+- ✅ **Temporary credentials only** (auto-expire)
 
 ---
 
 ## 📚 Need More Details?
 
-- **Full setup guide:** See `SSM_SETUP.md`
-- **How it works:** See architecture diagram in `SSM_SETUP.md`
-- **Troubleshooting:** See troubleshooting section in `SSM_SETUP.md`
+- **IAM role setup:** See `IAM_ROLE_SETUP.md` (for OIDC authentication)
+- **SSM setup guide:** See `SSM_SETUP.md`
+- **How it works:** See architecture diagrams in the guides
+- **Troubleshooting:** See troubleshooting sections in the guides
 
 ---
 
